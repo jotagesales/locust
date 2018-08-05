@@ -8,6 +8,7 @@ from base64 import b64encode
 from six.moves.urllib.parse import urlparse, urlunparse
 from ssl import SSLError
 from timeit import default_timer
+import json
 
 if six.PY2:
     from cookielib import CookieJar
@@ -119,7 +120,7 @@ class FastHttpSession(object):
             r.error = e
             return r
     
-    def request(self, method, path, name=None, data=None, catch_response=False, stream=False, \
+    def request(self, method, path, name=None, data=None, json=None,catch_response=False, stream=False, \
                 headers=None, auth=None, **kwargs):
         """
         Send and HTTP request
@@ -147,36 +148,40 @@ class FastHttpSession(object):
         """
         # prepend url with hostname unless it's already an absolute URL
         url = self._build_url(path)
-        
+
         # store meta data that is used when reporting the request to locust's statistics
         request_meta = {}
         # set up pre_request hook for attaching meta data to the request object
         request_meta["method"] = method
         request_meta["start_time"] = default_timer()
         request_meta["name"] = name or path
-        
+
+        headers = headers or {}
         if auth:
-            headers = headers or {}
             headers['Authorization'] = _construct_basic_auth_str(auth[0], auth[1])
         elif self.auth_header:
             headers = headers or {}
             headers['Authorization'] = self.auth_header
-        
+
+        if json:
+            data = json.dumps(json)
+            headers['Content-Type'] = 'application/json'
+
         # send request, and catch any exceptions
         response = self._send_request_safe_mode(method, url, payload=data, headers=headers, **kwargs)
-        
+
         # get the length of the content, but if the argument stream is set to True, we take
         # the size from the content-length header, in order to not trigger fetching of the body
         if stream:
             request_meta["content_size"] = int(response.headers.get("content-length") or 0)
         else:
             request_meta["content_size"] = len(response.content or "")
-        
+
         # Record the consumed time
         # Note: This is intentionally placed after we record the content_size above, since 
         # we'll then trigger fetching of the body (unless stream=True)
         request_meta["response_time"] = int((default_timer() - request_meta["start_time"]) * 1000)
-        
+
         if catch_response:
             response.locust_request_meta = request_meta
             return ResponseContextManager(response)
@@ -185,10 +190,10 @@ class FastHttpSession(object):
                 response.raise_for_status()
             except FAILURE_EXCEPTIONS as e:
                 events.request_failure.fire(
-                    request_type=request_meta["method"], 
-                    name=request_meta["name"], 
-                    response_time=request_meta["response_time"], 
-                    exception=e, 
+                    request_type=request_meta["method"],
+                    name=request_meta["name"],
+                    response_time=request_meta["response_time"],
+                    exception=e,
                 )
             else:
                 events.request_success.fire(
